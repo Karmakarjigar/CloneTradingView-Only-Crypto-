@@ -1,0 +1,11 @@
+# runtime caches and state (regenerated on demand)
+.cache/
+data/alerts.json
+node_modules/
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

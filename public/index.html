@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TVFREE — charting terminal</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand" title="Local charting terminal">
+      <span class="brand-mark"></span>
+      <span class="brand-text">TVFREE</span>
+    </div>
+
+    <div class="symbol-wrap">
+      <input id="symbolInput" class="symbol-input" spellcheck="false" autocomplete="off"
+             placeholder="Search crypto symbol — BTCUSDT, ETHUSDT, SOLUSDT" />
+      <div id="searchResults" class="search-results" hidden></div>
+    </div>
+
+    <div class="sym-meta">
+      <div class="sym-name" id="symName">—</div>
+      <div class="sym-sub" id="symSub">—</div>
+    </div>
+
+    <nav class="intervals" id="intervals" aria-label="Timeframe"></nav>
+
+    <div class="topbar-right">
+      <button class="btn icon bell" id="btnAlerts" title="Alerts">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 2a6 6 0 0 0-6 6v4.6l-1.6 2.7A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .8-1.7L18 12.6V8a6 6 0 0 0-6-6zm0 20a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z"/></svg>
+      </button>
+      <button class="btn" id="btnIndicators">Indicators</button>
+      <button class="btn icon" id="btnReload" title="Reload data (R)">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+      </button>
+    </div>
+
+    <div id="indicatorMenu" class="menu" hidden></div>
+    <div id="alertHost" class="alert-host"></div>
+  </header>
+
+  <div class="tabstrip">
+    <div class="tabs" id="tabs"></div>
+    <button class="tab-add" id="btnNewTab" title="New tab (Ctrl+T)">+</button>
+    <div class="tabstrip-right">
+      <button class="btn tiny" id="btnLayout" title="Chart layout">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></svg>
+        <span id="layoutLabel">1 × 1</span>
+      </button>
+      <button class="btn tiny" id="btnReplay" title="Bar replay">Replay</button>
+      <button class="btn tiny icon" id="btnSettings" title="Settings">⚙</button>
+      <span class="link-state" id="linkState"></span>
+    </div>
+  </div>
+
+  <div class="shell">
+    <aside class="drawbar" id="drawbar"></aside>
+
+    <main class="chartwrap" id="chartwrap">
+      <div class="hint" id="hint" hidden></div>
+    </main>
+
+    <aside class="side">
+      <div class="side-head">
+        <div class="side-tabs" id="sideTabs">
+          <button class="side-tab on" data-mode="watchlist">Watchlist</button>
+          <button class="side-tab" data-mode="trade">Trade</button>
+        </div>
+        <button class="btn tiny" id="btnAddSymbol" title="Add current symbol">+</button>
+      </div>
+      <div class="wl" id="watchlist"></div>
+      <div class="trade-body" id="tradeBody" hidden></div>
+      <div class="side-foot">
+        <span id="sourceBadge" class="badge">—</span>
+        <span id="barCount" class="muted">—</span>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">starting…</span>
+    <span class="grow"></span>
+    <span id="latencyText" class="muted"></span>
+    <span id="clockText" class="muted"></span>
+  </footer>
+</div>
+
+<script type="module" src="/js/client-live.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
