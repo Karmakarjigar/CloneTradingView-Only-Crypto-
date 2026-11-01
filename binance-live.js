@@ -56,6 +56,9 @@ class BinanceLive extends EventEmitter {
     this._backoffMs = 1000;
     this._stopped = true;
     this._reconnectTimer = null;
+    this._healthyTimer = null;
+    this._lastErrMsg = null;
+    this._lastErrAt = 0;
   }
 
   /** Register a symbol/interval before or after start(). Safe to call twice. */
@@ -81,6 +84,7 @@ class BinanceLive extends EventEmitter {
   stop() {
     this._stopped = true;
     clearTimeout(this._reconnectTimer);
+    clearTimeout(this._healthyTimer);
     try { this.ws && this.ws.close(); } catch {}
     this.ws = null;
   }
@@ -145,7 +149,14 @@ class BinanceLive extends EventEmitter {
     this.ws = ws;
 
     ws.addEventListener('open', () => {
-      this._backoffMs = 1000; // reset after a good connection
+      // Only reset the backoff once the socket has stayed up: Binance can
+      // accept then immediately drop a connection, and resetting on 'open'
+      // turns that into a ~1 s retry loop that floods the log.
+      clearTimeout(this._healthyTimer);
+      this._healthyTimer = setTimeout(() => {
+        if (this.ws === ws && ws.readyState === 1) this._backoffMs = 1000;
+      }, 5000);
+
       for (const [symbol, intervals] of this.subscriptions) {
         for (const interval of intervals) this._sendSubscribe(symbol, interval);
       }
@@ -155,12 +166,14 @@ class BinanceLive extends EventEmitter {
     ws.addEventListener('message', (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
+      this._lastErrMsg = null; // traffic proves the socket is healthy
       if (!msg || msg.result === null || msg.id) return; // subscribe acks
       this._handle(msg);
     });
 
     const retry = () => {
       if (this._stopped) return;
+      clearTimeout(this._healthyTimer);
       this.emit('close');
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = setTimeout(() => this._connect(), this._backoffMs);
@@ -168,7 +181,14 @@ class BinanceLive extends EventEmitter {
     };
     ws.addEventListener('close', retry);
     ws.addEventListener('error', (e) => {
-      this.emit('error', e.message || e);
+      const msg = e.message || String(e);
+      const now = Date.now();
+      // Same failure repeating: log once per 30 s instead of once per retry.
+      if (msg !== this._lastErrMsg || now - this._lastErrAt > 30000) {
+        this._lastErrMsg = msg;
+        this._lastErrAt = now;
+        this.emit('error', msg);
+      }
       try { ws.close(); } catch {} // 'close' handler schedules the reconnect
     });
   }

@@ -81,5 +81,7 @@ alerts and trading UI. Data trust was server-only and went first.
       exclusion + persistence, restore on/off, seven hotkeys, sound mute and
       volume, click-to-symbol; plus crypto 2×2 smoke and a live tick alert run,
       zero console errors
+- [x] Reconnect backoff only resets after 5 s of a healthy socket, and a
+      repeating socket error logs once per 30 s (was one line per retry)
 - [ ] Unverified and left as-is: indicator maths, replay stepping, alert
       evaluation, paper fills, crosshair rendering — not present in the shell
