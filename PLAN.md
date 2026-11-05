@@ -111,3 +111,24 @@ alerts and trading UI. Data trust was server-only and went first.
       eraser, context/remove menus, sticker emoji, inline text, property edits,
       zoom/timeframe anchor stability, magnet snapping, hide/lock, undo/redo,
       persistence across reload, zero console errors; screenshots reviewed
+
+## 9. Trade-speed live candles  (pane.js, app.js, trading.js, binance-live.js) � done
+- [x] Apply every Binance `@trade` tick to the in-progress bar (close, high,
+      low) instead of waiting for the ~1 s kline frame; measured median 5.9 ms
+      from SSE frame to bar, max 6.6 ms across live samples
+- [x] Synthesize the next bar on the first trade of a new bucket (UTC-aligned
+      buckets, Monday-open weeks), pin the view when the chart is at the right
+      edge, and let the kline frame adopt the exchange open/volume
+- [x] Reconcile late closed klines into the previous bar (volume/close) without
+      ever editing the live tail; ignore out-of-order frames
+- [x] Move indicators/legend to a 100 ms refresh, watchlist to one paint per
+      animation frame, and paper-trading DOM to 10 Hz; fills still per trade
+- [x] Keep the fresher tick close when a kline frame generated earlier lands
+      late, so the last price never flashes backwards once per second
+- [x] Server watchdog reconnects an open-but-silent socket after 20 s and
+      unsubscribes a symbol when its last SSE client leaves (alerts keep it)
+- [x] Verified headlessly (17 checks): immediate tick close/high/low, new-bar
+      synthesis and view follow, kline open/volume adoption, stale frames,
+      tick-vs-kline recency, real trade-to-bar latency, stable watchlist DOM,
+      a new 1m bar created by a trade 48–89 ms after the bucket, zero console
+      errors; 50/50 drawings and 24/24 UI parity suites still pass

@@ -59,6 +59,9 @@ class BinanceLive extends EventEmitter {
     this._healthyTimer = null;
     this._lastErrMsg = null;
     this._lastErrAt = 0;
+    this._lastMsgAt = 0;
+    this._openedAt = 0;
+    this._watchdog = null;
   }
 
   /** Register a symbol/interval before or after start(). Safe to call twice. */
@@ -78,13 +81,32 @@ class BinanceLive extends EventEmitter {
   start() {
     this._stopped = false;
     this._connect();
+    // A socket can stay "open" while the network path dies (sleep/resume,
+    // Wi-Fi change, carrier NAT timeout). Binance sends klines about once a
+    // second, so sustained silence with active subscriptions means zombie.
+    clearInterval(this._watchdog);
+    this._watchdog = setInterval(() => this._checkStale(), 5000);
+    if (this._watchdog.unref) this._watchdog.unref();
     return this;
+  }
+
+  _checkStale() {
+    if (this._stopped || !this.ws || this.ws.readyState !== 1) return;
+    if (!this.subscriptions.size) return;
+    const since = Math.max(this._lastMsgAt || 0, this._openedAt || 0) || Date.now();
+    if (Date.now() - since < 20000) return;
+    this._lastMsgAt = 0;
+    this._openedAt = 0;
+    this.emit('error', 'no market data for 20s - reconnecting');
+    try { this.ws.close(); } catch {}
   }
 
   stop() {
     this._stopped = true;
     clearTimeout(this._reconnectTimer);
     clearTimeout(this._healthyTimer);
+    clearInterval(this._watchdog);
+    this._watchdog = null;
     try { this.ws && this.ws.close(); } catch {}
     this.ws = null;
   }
@@ -149,6 +171,8 @@ class BinanceLive extends EventEmitter {
     this.ws = ws;
 
     ws.addEventListener('open', () => {
+      this._openedAt = Date.now();
+      this._lastMsgAt = Date.now();
       // Only reset the backoff once the socket has stayed up: Binance can
       // accept then immediately drop a connection, and resetting on 'open'
       // turns that into a ~1 s retry loop that floods the log.
@@ -166,6 +190,7 @@ class BinanceLive extends EventEmitter {
     ws.addEventListener('message', (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
+      this._lastMsgAt = Date.now();
       this._lastErrMsg = null; // traffic proves the socket is healthy
       if (!msg || msg.result === null || msg.id) return; // subscribe acks
       this._handle(msg);

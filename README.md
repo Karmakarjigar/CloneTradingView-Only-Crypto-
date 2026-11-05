@@ -122,10 +122,20 @@ Node 18+ is the only requirement. Nothing to install, no build step.
 |---|---|---|
 | Crypto | Binance public REST + WebSocket | real-time, no key — the app is **crypto-only** |
 
-**Live mode.** Each focused chart opens an SSE feed (`/api/live/stream`); the
-server subscribes that symbol/interval to Binance over WebSocket and pushes
-`tick` and `candle` frames. Chart bars update in place as the candle forms,
-quotes repaint instantly, and alerts/limit fills evaluate on every trade.
+**Live mode.** Each chart opens an SSE feed (`/api/live/stream`); the server
+subscribes that symbol/interval to Binance over WebSocket and pushes `tick`
+and `candle` frames. The in-progress candle is repainted from **every trade
+tick** (median ~5 ms from frame to bar), so it moves at trade speed instead of
+waiting for Binance's ~1 s kline snapshot. The first trade of a new bucket
+creates the next bar immediately and the kline frame later reconciles its
+exchange open and volume; indicators and the legend refresh at 10 Hz so the
+render loop stays smooth. Quotes repaint once per animation frame, paper
+trading DOM updates at 10 Hz, and alerts/limit fills still evaluate on every
+trade.
+
+A 20 s watchdog reconnects a socket that stays open but stops delivering
+market data (sleep/resume, Wi-Fi change), and the server drops a symbol's
+streams when its last chart disconnects unless an alert still needs it.
 Endpoints: `/api/price`, `/api/history`, `/api/live/stream`. If SSE is
 unavailable the app falls back to the 20 s REST refresh.
 

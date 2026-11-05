@@ -4,6 +4,30 @@ import { createDrawingPanel, openContextMenu, openInlineEditor, TEXT_TYPES } fro
 import { IND, DEFAULT_INDICATORS } from './indicator-defs.js';
 import { fmtPrice, fmtSigned, fmtVol, esc, clamp } from './util.js';
 
+const INTERVAL_MS = {
+  '1m': 60 * 1000,
+  '5m': 5 * 60 * 1000,
+  '15m': 15 * 60 * 1000,
+  '30m': 30 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  '4h': 4 * 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+  '1w': 7 * 24 * 60 * 60 * 1000,
+};
+
+/** Open time of the candle that `ms` belongs to (Binance UTC buckets). */
+function bucketStart(interval, ms) {
+  const key = String(interval || '').toLowerCase();
+  const size = INTERVAL_MS[key];
+  if (!size) return null;
+  if (key === '1w') {
+    // Binance weekly candles open Monday 00:00 UTC; the epoch was a Thursday.
+    const offset = 3 * 24 * 60 * 60 * 1000;
+    return Math.floor((ms + offset) / size) * size - offset;
+  }
+  return Math.floor(ms / size) * size;
+}
+
 /**
  * One chart inside a workspace grid: canvas, engine, indicators, drawings,
  * link dot and replay. Layout is owned by Workspace; this class only knows
@@ -32,6 +56,9 @@ export class ChartPane {
     this._measureTimer = null;
     this._hoverCursor = null;
     this._editor = null;
+    this._tickOverlayTimer = null;
+    this._lastTickAt = 0;
+    this._lastTickBucket = null;
 
     this.replay = { active: false, index: 0, playing: false, timer: null, speed: 700 };
 
@@ -172,6 +199,8 @@ export class ChartPane {
 
     const reqSymbol = this.symbol;
     const reqInterval = this.interval;
+    this._lastTickAt = 0;
+    this._lastTickBucket = null;
     const started = performance.now();
     try {
       const url = `/api/ohlcv?symbol=${encodeURIComponent(reqSymbol)}&interval=${encodeURIComponent(reqInterval)}`;
@@ -239,6 +268,7 @@ export class ChartPane {
   /**
    * Live candle from the Binance SSE stream: fold the in-progress bar into the
    * last bar, or append it once closed. Used instead of a REST refetch.
+   * This arrives about once a second; `applyLiveTick` does the per-trade work.
    */
   applyLiveCandle(payload) {
     if (this.replay.active) return false;
@@ -248,9 +278,30 @@ export class ChartPane {
     const c = payload?.candle || payload;
     const bars = this.data?.bars;
     if (!bars || !c) return false;
-    const t = Number(c.time ?? c.timeSec ?? 0);
+    // SSE frames carry `time` (ms); a bare candle may only carry `timeSec`.
+    const t = Number(c.time) || (Number(c.timeSec) ? Number(c.timeSec) * 1000 : 0);
     const last = bars[bars.length - 1];
     if (!last) return false;
+    // A tick may already have opened the next bucket. A late *closed* frame
+    // for the previous bucket still carries its final volume and close.
+    if (t && Number(last.t) && t < Number(last.t)) {
+      const prev = bars.length > 1 ? bars[bars.length - 2] : null;
+      if (payload?.isClosed && prev && t === Number(prev.t)) {
+        const high = Number(c.high);
+        const low = Number(c.low);
+        const close = Number(c.close);
+        const volume = Number(c.volume);
+        if (Number.isFinite(high)) prev.h = Math.max(prev.h, high);
+        if (Number.isFinite(low)) prev.l = Math.min(prev.l, low);
+        if (Number.isFinite(close)) prev.c = close;
+        if (Number.isFinite(volume)) prev.v = volume;
+        this._commitLiveBars(false);
+        this.applyIndicators();
+        return true;
+      }
+      return false; // stale frame for an older bucket
+    }
+    let created = false;
     if (t && Number(last.t) && t > Number(last.t)) {
       bars.push({
         t,
@@ -261,20 +312,109 @@ export class ChartPane {
         c: Number(c.close),
         v: Number(c.volume || 0),
       });
+      created = true;
     } else if (t) {
+      const open = Number(c.open);
       const high = Number(c.high);
       const low = Number(c.low);
       const close = Number(c.close);
       const volume = Number(c.volume);
+      // The first tick of a new bucket may have synthesized this bar; adopt
+      // the exchange open once the kline snapshot arrives.
+      if (Number.isFinite(open)) last.o = open;
       if (Number.isFinite(high)) last.h = Math.max(last.h, high);
       if (Number.isFinite(low)) last.l = Math.min(last.l, low);
-      if (Number.isFinite(close)) last.c = close;
+      // A kline frame was generated up to a second before it reaches us; if a
+      // newer trade already set the close, keep the tick price instead of
+      // flashing backwards once per second.
+      const fresherTick = this._lastTickBucket === Number(last.t) && Date.now() - this._lastTickAt < 2000;
+      if (Number.isFinite(close) && !fresherTick) last.c = close;
       if (Number.isFinite(volume)) last.v = volume;
     }
-    this.chart.updateData({ ...this.data, bars: [...bars], interval: this.interval });
+    this._commitLiveBars(created);
     this.applyIndicators();
     return true;
   }
+
+  /**
+   * Per-trade update: mutate the in-progress bar immediately instead of
+   * waiting for Binance's ~1 s kline frame, so the candle moves as fast as
+   * the trade feed. New buckets are synthesized on the first trade and later
+   * reconciled by `applyLiveCandle`.
+   */
+  applyLiveTick(tick) {
+    if (this.replay.active) return false;
+    const bars = this.data?.bars;
+    if (!bars || !bars.length) return false;
+    const price = Number(tick?.price);
+    if (!Number.isFinite(price)) return false;
+    if (tick.symbol && String(tick.symbol).toUpperCase() !== String(this.symbol).toUpperCase()) return false;
+
+    const ts = Number(tick.time) || Date.now();
+    const openTime = bucketStart(this.interval, ts);
+    if (openTime == null) return false;
+
+    let last = bars[bars.length - 1];
+    // Out-of-order trade from a bucket that already closed: ignore.
+    if (Number(last.t) && openTime < Number(last.t)) return false;
+
+    let created = false;
+    if (openTime > Number(last.t)) {
+      last = {
+        t: openTime,
+        timeSec: Math.floor(openTime / 1000),
+        o: price,
+        h: price,
+        l: price,
+        c: price,
+        v: 0,
+      };
+      bars.push(last);
+      created = true;
+    } else {
+      last.c = price;
+      if (price > last.h) last.h = price;
+      if (price < last.l) last.l = price;
+    }
+    this._lastTickAt = Date.now();
+    this._lastTickBucket = Number(last.t);
+
+    this._commitLiveBars(created);
+    this._scheduleTickOverlayRefresh();
+    return created;
+  }
+
+  /** Push mutated bars to the canvas and keep the view pinned when at right. */
+  _commitLiveBars(created) {
+    const bars = this.data?.bars;
+    const chart = this.chart;
+    if (!bars || !chart) return;
+    const span = chart.view.to - chart.view.from;
+    const followed = chart.view.to >= chart.count - 1;
+    chart.updateData({ ...this.data, bars, interval: this.interval });
+    if (created && followed) {
+      chart.view.to = chart.count + chart.padRight;
+      chart.view.from = chart.view.to - span;
+      chart.clampView();
+      chart.requestRender();
+    }
+  }
+
+  /** Rebuild indicators/legend at ~10 Hz, not once per trade. */
+  _scheduleTickOverlayRefresh() {
+    if (this._tickOverlayTimer) return;
+    this._tickOverlayTimer = setTimeout(() => {
+      this._tickOverlayTimer = null;
+      if (this.replay.active || !this.data) return;
+      this.applyIndicators();
+      // Keep the legend on the hovered bar if the pointer is over the chart.
+      if (this.chart.hover.active) {
+        const idx = this.chart.hover.index;
+        this.updateLegend(idx >= 0 ? this.data.bars[idx] : null, idx);
+      }
+    }, 100);
+  }
+
 
   /* ---------------- state changes ---------------- */
 

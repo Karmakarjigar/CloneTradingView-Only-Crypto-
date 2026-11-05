@@ -1287,6 +1287,21 @@ function paintQuote(symbol, q) {
   chgEl.style.color = up ? 'var(--up)' : 'var(--down)';
 }
 
+// Trade ticks can be dozens per second; paint each symbol at most once per
+// animation frame instead of touching the DOM per trade.
+const quotePaintQueue = new Set();
+let quotePaintRaf = 0;
+
+function queueQuotePaint(symbol) {
+  quotePaintQueue.add(symbol);
+  if (quotePaintRaf) return;
+  quotePaintRaf = requestAnimationFrame(() => {
+    quotePaintRaf = 0;
+    for (const s of quotePaintQueue) paintQuote(s, state.quotes.get(s));
+    quotePaintQueue.clear();
+  });
+}
+
 async function refreshQuotes(extra = []) {
   const symbols = [...new Set([...extra, ...state.watchlist, ...trading.symbols()])];
   if (!symbols.length) return;
@@ -1335,7 +1350,7 @@ function stopLive(paneId) {
 function onLiveTick(pane, tick) {
   if (tick.symbol !== pane.symbol) return;
   const prev = tick.prevPrice ?? tick.price;
-  state.quotes.set(tick.symbol, {
+  const quote = {
     symbol: tick.symbol,
     name: tick.symbol,
     price: tick.price,
@@ -1346,9 +1361,14 @@ function onLiveTick(pane, tick) {
     exchange: 'BINANCE',
     source: 'binance-live',
     asOf: tick.time || Date.now(),
-  });
+  };
+  state.quotes.set(tick.symbol, quote);
+  // Paint the candle straight from the trade feed; the kline frame only
+  // reconciles the bar about a second later.
+  pane.applyLiveTick(tick);
   trading.onQuotes();
-  renderWatchlist();
+  // Patch just this row, at most once per animation frame.
+  queueQuotePaint(tick.symbol);
 }
 
 function onLiveCandle(pane, c) {

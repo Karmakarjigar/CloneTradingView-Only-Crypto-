@@ -317,7 +317,14 @@ async function handleApi(req, res, url) {
       req.on('close', () => {
         clearInterval(heartbeat);
         const set = liveClients.get(symbol);
-        if (set) set.delete(res);
+        if (!set) return;
+        set.delete(res);
+        // Last chart gone: stop paying for this symbol's streams unless an
+        // alert still needs it. Keeps long sessions from accumulating feeds.
+        if (!set.size) {
+          liveClients.delete(symbol);
+          if (!alerts.activeSymbols().includes(symbol)) live.unsubscribeSymbol(symbol);
+        }
       });
       return;
     }

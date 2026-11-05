@@ -64,6 +64,7 @@ export class TradeDesk {
     this._resetArmed = 0;
     this._saveTimer = null;
     this._lastEquitySample = 0;
+    this._lastQuoteRender = 0;
     this.mounted = false;
   }
 
@@ -458,7 +459,12 @@ export class TradeDesk {
       this.render();
       this.onChange?.();
     } else if (this.mounted) {
-      // Quotes move, so equity/unrealized text must follow even without a fill.
+      // Quotes move, so equity/unrealized text must follow even without a
+      // fill. Trade ticks can arrive dozens of times a second, so cap the
+      // DOM refresh at 10 Hz while keeping fill checks per tick.
+      const now = Date.now();
+      if (now - this._lastQuoteRender < 100) return;
+      this._lastQuoteRender = now;
       this.renderAccount();
       this.renderPositions();
       this.renderTicket();
