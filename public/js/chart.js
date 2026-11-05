@@ -482,10 +482,22 @@ export class Chart {
 
   projection(mainPane, scale) {
     const sc = scale || this.mainScale || this._lastMainScale || { min: 0, max: 1 };
+    const top = mainPane.top;
+    const height = mainPane.height;
     const cache = {
       x: (t) => this.xForIndex(this.indexForTime(t)),
       y: (p) => this.yForPrice(p, mainPane, sc),
       width: this.plotR,
+      left: this.plotL,
+      right: this.plotR,
+      top,
+      bottom: top + height,
+      height,
+      bars: this.bars,
+      interval: this.interval,
+      indexForTime: (t) => this.indexForTime(t),
+      timeForIndex: (i) => this.timeForIndex(i),
+      indexAtX: (x) => this.indexAtX(x),
       shiftTime: (t, di) => this.timeForIndex(this.indexForTime(t) + di),
     };
     this._projection = cache;
@@ -496,10 +508,22 @@ export class Chart {
   projector() {
     const mainPane = this.computeLayout().list[0];
     const sc = this.mainScale || { min: 0, max: 1 };
+    const top = mainPane.top;
+    const height = mainPane.height;
     return {
       x: (t) => this.xForIndex(this.indexForTime(t)),
       y: (p) => this.yForPrice(p, mainPane, sc),
       width: this.plotR,
+      left: this.plotL,
+      right: this.plotR,
+      top,
+      bottom: top + height,
+      height,
+      bars: this.bars,
+      interval: this.interval,
+      indexForTime: (t) => this.indexForTime(t),
+      timeForIndex: (i) => this.timeForIndex(i),
+      indexAtX: (x) => this.indexAtX(x),
       shiftTime: (t, di) => this.timeForIndex(this.indexForTime(t) + di),
     };
   }

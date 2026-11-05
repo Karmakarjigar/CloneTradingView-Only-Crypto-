@@ -4,6 +4,8 @@ import { AlertCenter } from './alerts.js';
 import { TradeDesk } from './trading.js';
 import { IND, INTERVALS, DEFAULT_INDICATORS } from './indicator-defs.js';
 import { getSettings, setSetting, saveSymbolInterval } from './settings.js';
+import { buildDrawbar as createDrawbar } from './drawbar.js';
+import { drawingStore, toolDef, TOOL_BY_ID } from './drawings.js';
 import { fmtPrice, esc, uid, debounce } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +36,7 @@ const state = {
 };
 
 let tool = null;
+let drawbar = null;
 const closedStack = [];
 let searchTimer = null;
 let searchRows = [];
@@ -216,6 +219,7 @@ const services = {
     const group = links.groupOf(source.id);
     if (group) links.setGroup(pane.id, group);
     pane.renderLink();
+    applyDrawingSettingsToPane(pane);
   },
   onFocus: (pane) => focusPane(pane),
   onStatus: (kind, text) => setStatus(kind, text),
@@ -231,7 +235,14 @@ const services = {
     renderTabs();
     persistWorkspaces();
   },
-  onToolConsumed: () => setTool(null),
+  onToolConsumed: () => {
+    if (drawingStore.loadSettings().stay) drawbar?.refresh();
+    else setTool(null);
+  },
+  onDrawingChange: (pane) => {
+    if (pane === activePane()) drawbar?.refresh();
+  },
+  getStickerEmoji: () => drawingStore.loadSettings().stickerEmoji,
   linkInfo: (paneId) => {
     const group = links.groupOf(paneId);
     const def = LINK_GROUPS.find((g) => g.id === group);
@@ -286,6 +297,8 @@ function activateWorkspace(id) {
 
   const pane = next.activePane();
   if (pane && tool) pane.setTool(tool);
+  applyDrawingSettings();
+  drawbar?.refresh();
   startLive(pane);
 
   renderTabs();
@@ -421,6 +434,8 @@ function focusPane(pane) {
   }
   if (ws.activatePane(pane)) {
     if (tool) pane.setTool(tool);
+    applyDrawingSettingsToPane(pane);
+    drawbar?.refresh();
     renderTabs();
     syncChrome();
     syncIndicatorMenu();
@@ -957,73 +972,142 @@ function bindToolbar() {
 
 /* ------------------------------------------------------------------ *
  * Drawing toolbar
+ *
+ * Settings (magnet, stay, lock, hide, last tool per group, sticker) are
+ * global like the desktop, stored under tvfree.drawings.settings.v1.
  * ------------------------------------------------------------------ */
 
-const ICONS = {
-  cursor: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 2l14 9-6 1.6 3.4 6.2-2.2 1.2L10.8 14 5 19z"/></svg>',
-  trend: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19L20 5"/><circle cx="4" cy="19" r="1.9" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.9" fill="currentColor" stroke="none"/></svg>',
-  hline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12h18"/><circle cx="12" cy="12" r="2.1" fill="currentColor" stroke="none"/></svg>',
-  rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
-  fib: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M3 10.5h18M3 15h18M3 19.5h18"/></svg>',
-  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
-};
+function drawingSettings() {
+  return drawingStore.loadSettings();
+}
 
-function buildDrawbar() {
-  const bar = $('drawbar');
-  const tools = [
-    ['cursor', 'Cursor / pan (Esc)', ICONS.cursor],
-    null,
-    ['trend', 'Trend line', ICONS.trend],
-    ['hline', 'Horizontal line', ICONS.hline],
-    ['rect', 'Rectangle', ICONS.rect],
-    ['fib', 'Fib retracement', ICONS.fib],
-    null,
-    ['trash', 'Clear drawings on this chart', ICONS.trash],
-  ];
+function saveDrawingSettings(patch) {
+  const next = { ...drawingSettings(), ...patch };
+  drawingStore.saveSettings(next);
+  applyDrawingSettings(next);
+  drawbar?.refresh();
+  return next;
+}
 
-  bar.innerHTML = '';
-  for (const t of tools) {
-    if (!t) {
-      const sep = document.createElement('div');
-      sep.className = 'tool-sep';
-      bar.appendChild(sep);
-      continue;
+function applyDrawingSettingsToPane(pane, settings = drawingSettings()) {
+  const d = pane?.drawings;
+  if (!d) return;
+  d.magnet = settings.magnet;
+  d.hiddenAll = settings.hiddenAll;
+  d.lockedAll = settings.lockedAll;
+  if (settings.hiddenAll) d.clearSelection();
+  d.emit();
+}
+
+function applyDrawingSettings(settings = drawingSettings()) {
+  for (const ws of state.workspaces) {
+    for (const p of ws.panes) {
+      applyDrawingSettingsToPane(p, settings);
+      p.chart.requestRender();
     }
-    const [id, title, svg] = t;
-    const btn = document.createElement('button');
-    btn.className = 'tool' + (id === 'cursor' ? ' active' : '');
-    btn.title = title;
-    btn.dataset.tool = id;
-    btn.innerHTML = svg;
-    btn.addEventListener('click', () => {
-      if (id === 'trash') {
-        const pane = activePane();
-        if (pane) {
-          pane.drawings.clear();
-          pane.chart.requestRender();
-        }
-        return;
-      }
-      setTool(id === 'cursor' ? null : id);
-    });
-    bar.appendChild(btn);
   }
 }
 
-function setTool(next) {
-  tool = next;
-  const pane = activePane();
-  if (pane) pane.setTool(next);
+function cycleMagnet() {
+  const current = drawingSettings().magnet;
+  const next = current === 'off' ? 'weak' : current === 'weak' ? 'strong' : 'off';
+  saveDrawingSettings({ magnet: next });
+  return next;
+}
 
-  for (const el of document.querySelectorAll('.tool[data-tool]')) {
-    const t = el.dataset.tool;
-    el.classList.toggle('active', t === 'cursor' ? next === null : t === next);
-  }
+function toggleStay() {
+  return saveDrawingSettings({ stay: !drawingSettings().stay }).stay;
+}
+
+function toggleLock() {
+  return saveDrawingSettings({ lockedAll: !drawingSettings().lockedAll }).lockedAll;
+}
+
+function toggleHide() {
+  return saveDrawingSettings({ hiddenAll: !drawingSettings().hiddenAll }).hiddenAll;
+}
+
+function removeDrawings(what) {
+  const pane = activePane();
+  if (!pane) return;
+  if (what === 'selected') pane.drawings.removeSelected();
+  else pane.drawings.removeAll();
+  pane.chart.requestRender();
+  drawbar?.refresh();
+}
+
+function undoDrawings() {
+  const pane = activePane();
+  if (!pane) return false;
+  const ok = pane.drawings.undo();
+  if (ok) pane.chart.requestRender();
+  drawbar?.refresh();
+  return ok;
+}
+
+function redoDrawings() {
+  const pane = activePane();
+  if (!pane) return false;
+  const ok = pane.drawings.redo();
+  if (ok) pane.chart.requestRender();
+  drawbar?.refresh();
+  return ok;
+}
+
+function setStickerEmoji(emoji) {
+  const settings = { ...drawingSettings(), stickerEmoji: emoji };
+  drawingStore.saveSettings(settings);
+  drawbar?.refresh();
+  return settings;
+}
+
+function buildDrawbar() {
+  drawbar = createDrawbar($('drawbar'), {
+    getTool: () => tool,
+    setTool: (id) => setTool(id),
+    getPane: () => activePane(),
+    getSettings: drawingSettings,
+    saveSettings: (patch) => {
+      const next = { ...drawingSettings(), ...patch };
+      drawingStore.saveSettings(next);
+      return next;
+    },
+    cycleMagnet,
+    toggleStay,
+    toggleLock,
+    toggleHide,
+    remove: removeDrawings,
+    undo: undoDrawings,
+    redo: redoDrawings,
+    setStickerEmoji,
+  });
+}
+
+function setTool(next) {
+  tool = next && TOOL_BY_ID[next] ? next : null;
+  const pane = activePane();
+  if (pane) pane.setTool(tool);
+
+  drawbar?.refresh();
 
   const hint = $('hint');
-  if (next) {
-    const names = { trend: 'trend line', hline: 'horizontal line', rect: 'rectangle', fib: 'fib retracement' };
-    hint.textContent = `Click & drag to draw a ${names[next] || next} · Esc to cancel`;
+  if (tool) {
+    const def = toolDef(tool);
+    const label = (def?.label || tool).toLowerCase();
+    const steps = tool === 'measure'
+      ? 'Drag across the chart to measure'
+      : tool === 'zoom'
+        ? 'Drag a time range to zoom'
+        : tool === 'eraser'
+          ? 'Click a drawing to erase it'
+          : def?.kind === 'cursor'
+            ? `${def.label} cursor`
+            : def?.anchors === 1
+              ? `Click to place a ${label}`
+              : def?.anchors > 1
+                ? `Click ${def.anchors} points to draw a ${label}`
+                : `Click points, double-click to finish the ${label}`;
+    hint.textContent = tool === 'cursorArrow' ? 'Arrow cursor · Esc to cancel' : `${steps} · Esc to cancel`;
     hint.hidden = false;
   } else {
     hint.hidden = true;
@@ -1361,9 +1445,40 @@ function bindTabs() {
   $('btnNewTab').addEventListener('click', newWorkspace);
 }
 
+const TOOL_HOTKEYS = {
+  t: 'trend',
+  h: 'hline',
+  v: 'vline',
+  r: 'rectangle',
+  f: 'fibRetracement',
+  x: 'text',
+  p: 'longPosition',
+  c: 'parallelChannel',
+  m: 'measure',
+};
+
 function bindKeyboard() {
   window.addEventListener('keydown', (e) => {
     const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+
+    // Drawing editing wins first: Escape cancels a draft, Enter finishes a
+    // multi-point tool, Delete removes the selection, Ctrl+Z/Y undo/redo,
+    // Ctrl+C/V/D copy, paste and duplicate.
+    if (!inField) {
+      const pane0 = activePane();
+      if (pane0 && pane0.handleKey(e)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const id = TOOL_HOTKEYS[e.key.toLowerCase()];
+        if (id) {
+          e.preventDefault();
+          setTool(tool === id ? null : id);
+          return;
+        }
+      }
+    }
 
     if (e.altKey && e.key >= '1' && e.key <= '4') {
       e.preventDefault();
@@ -1453,15 +1568,6 @@ function bindKeyboard() {
       pane.load();
       return;
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && pane.drawings.selectedId) {
-      pane.drawings.remove(pane.drawings.selectedId);
-      pane.chart.requestRender();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-      if (pane.drawings.undo()) pane.chart.requestRender();
-      return;
-    }
     const n = Number(e.key);
     if (n >= 1 && n <= INTERVALS.length) pane.setInterval(INTERVALS[n - 1]);
   });
@@ -1528,6 +1634,49 @@ window.__tv = {
   getPresets,
   setTool,
   setSideMode,
+  drawings: {
+    store: drawingStore,
+    get pane() { return activePane(); },
+    tool: () => tool,
+    setTool,
+    list: () => activePane()?.drawings.shapes ?? [],
+    export: () => JSON.stringify(activePane()?.drawings.shapes ?? []),
+    create(type, points, extra = {}) {
+      const pane = activePane();
+      if (!pane || !TOOL_BY_ID[type]) return null;
+      const shape = pane.drawings.add({ type, points, ...extra });
+      pane.chart.requestRender();
+      drawbar?.refresh();
+      return shape;
+    },
+    remove(id) {
+      const pane = activePane();
+      if (!pane) return false;
+      pane.drawings.remove(id);
+      pane.chart.requestRender();
+      return true;
+    },
+    clear() {
+      const pane = activePane();
+      if (!pane) return;
+      pane.drawings.removeAll();
+      pane.chart.requestRender();
+      drawbar?.refresh();
+    },
+    selected: () => activePane()?.drawings.selectedShape() ?? null,
+    settings: {
+      get: drawingSettings,
+      set: saveDrawingSettings,
+    },
+    setMagnet: (mode) => saveDrawingSettings({ magnet: mode }).magnet,
+    cycleMagnet,
+    setStay: (value) => saveDrawingSettings({ stay: Boolean(value) }).stay,
+    setHiddenAll: (value) => saveDrawingSettings({ hiddenAll: Boolean(value) }).hiddenAll,
+    setLockedAll: (value) => saveDrawingSettings({ lockedAll: Boolean(value) }).lockedAll,
+    setStickerEmoji,
+    undo: undoDrawings,
+    redo: redoDrawings,
+  },
 };
 
 boot();

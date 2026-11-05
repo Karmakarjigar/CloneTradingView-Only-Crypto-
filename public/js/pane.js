@@ -1,5 +1,6 @@
 import { Chart } from './chart.js';
-import { DrawingLayer } from './drawings.js';
+import { DrawingLayer, toolDef, defaultsFor } from './drawings.js';
+import { createDrawingPanel, openContextMenu, openInlineEditor, TEXT_TYPES } from './drawing-ui.js';
 import { IND, DEFAULT_INDICATORS } from './indicator-defs.js';
 import { fmtPrice, fmtSigned, fmtVol, esc, clamp } from './util.js';
 
@@ -26,7 +27,11 @@ export class ChartPane {
     this._releaseTimer = null;
     this._lastHover = null;
     this._draft = null;
-    this._drag = null;
+    this._action = null;
+    this._measure = null;
+    this._measureTimer = null;
+    this._hoverCursor = null;
+    this._editor = null;
 
     this.replay = { active: false, index: 0, playing: false, timer: null, speed: 700 };
 
@@ -65,6 +70,11 @@ export class ChartPane {
     this.linkBtn = this.el.querySelector('.pane-link');
 
     this.drawings = new DrawingLayer();
+    this.drawings.onChange = () => {
+      this.chart.requestRender();
+      this.drawingPanel?.refresh();
+      this.services.onDrawingChange?.(this);
+    };
 
     this.chart = new Chart(this.canvas, {
       onHover: ({ bar }) => {
@@ -87,6 +97,8 @@ export class ChartPane {
 
     this.chart.setDrawings(this.drawings);
     this.drawings.load(this.symbol);
+    this.drawingPanel = createDrawingPanel(this.el, this.drawings);
+    this.drawingPanel.refresh(true);
 
     this.renderLink();
     this.linkBtn.addEventListener('click', (e) => {
@@ -412,14 +424,21 @@ export class ChartPane {
 
   /* ---------------- drawing ---------------- */
 
-  setTool(tool) {
-    this.tool = tool;
-    this.chart.pointerMode = tool ? 'draw' : 'pan';
-    this.canvas.classList.toggle('drawing', Boolean(tool));
-    if (!tool) {
-      this.drawings.preview = null;
-      this.chart.requestRender();
-    }
+  setTool(id) {
+    this.tool = id || null;
+    const def = this.tool ? toolDef(this.tool) : null;
+    const kind = def ? def.kind : null;
+    const drawMode = kind === 'draw' || kind === 'measure' || kind === 'zoom' || this.tool === 'eraser';
+    this.chart.pointerMode = drawMode ? 'draw' : 'pan';
+    this.canvas.classList.toggle('drawing', drawMode);
+    this.canvas.classList.toggle('tool-eraser', this.tool === 'eraser');
+    this.canvas.classList.toggle('cursor-cross', this.tool === 'cursorCross');
+    this.canvas.classList.toggle('cursor-dot', this.tool === 'cursorDot');
+    this.canvas.classList.toggle('cursor-arrow', this.tool === 'cursorArrow' || !this.tool);
+    this.canvas.style.cursor = kind === 'cursor' ? (def.cursorStyle || '') : '';
+    if (this._draft) this.cancelDraft();
+    this.clearMeasure();
+    this.chart.requestRender();
   }
 
   xy(e) {
@@ -427,11 +446,258 @@ export class ChartPane {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  draftToShape(d) {
+  pointAt(e, { snap = true } = {}) {
+    const { x, y } = this.xy(e);
+    const raw = this.chart.dataAt(x, y);
+    const project = this.chart.projector();
+    let t = raw.time;
+    let p = raw.price;
+    if (snap && this.tool !== 'brush' && this.tool !== 'highlighter') {
+      const snapped = this.drawings.snapPoint(raw.time, raw.price, this.chart, project);
+      t = snapped.t;
+      p = snapped.p;
+    }
+    return { x, y, t, p, index: raw.index, price: raw.price, project };
+  }
+
+  buildPreview() {
+    const d = this._draft;
+    if (!d) {
+      this.drawings.preview = null;
+      return;
+    }
+    const pts = d.points.slice();
+    if (!d.freehand && d.hover && d.def.anchors > 1 && pts.length < d.def.anchors) pts.push(d.hover);
+    if (!pts.length) {
+      this.drawings.preview = null;
+      return;
+    }
+    this.drawings.preview = { ...defaultsFor(d.type), type: d.type, points: pts };
+  }
+
+  cancelDraft() {
+    if (!this._draft) return;
+    this._draft = null;
+    this.drawings.preview = null;
+    this.chart.requestRender();
+  }
+
+  startDraft(point) {
+    const def = toolDef(this.tool);
+    if (!def) return false;
+    this._draft = {
+      type: this.tool,
+      def,
+      points: [{ t: point.t, p: point.p }],
+      hover: null,
+      freehand: def.anchors === 0,
+      pressed: true,
+      downX: point.x,
+      downY: point.y,
+      moved: false,
+    };
+    if (def.anchors === 1) this._draft.hover = { t: point.t, p: point.p };
+    this.buildPreview();
+    this.chart.requestRender();
+    return true;
+  }
+
+  addDraftPoint(point) {
+    const d = this._draft;
+    if (!d) return;
+    d.points.push({ t: point.t, p: point.p });
+    d.hover = null;
+    d.pressed = true;
+    d.downX = point.x;
+    d.downY = point.y;
+    d.moved = false;
+    if (d.def.anchors > 0 && d.points.length >= d.def.anchors) this.finishDraft();
+    else this.buildPreview();
+    this.chart.requestRender();
+  }
+
+  finishDraft(point, { force = false } = {}) {
+    const d = this._draft;
     if (!d) return null;
-    if (d.type === 'hline') return { type: 'hline', t1: d.t1, p1: d.p1, color: '#787b86' };
-    const colors = { trend: '#2962ff', rect: '#2962ff', fib: '#f0a029' };
-    return { type: d.type, t1: d.t1, p1: d.p1, t2: d.t2, p2: d.p2, color: colors[d.type] || '#2962ff' };
+    const anchors = d.def.anchors;
+    let pts = d.points.slice();
+    if (point) {
+      if (anchors === 1) {
+        pts = [{ t: point.t, p: point.p }];
+      } else {
+        const last = pts[pts.length - 1];
+        if (!last || Math.hypot(point.x - (last.x ?? 0), point.y - (last.y ?? 0)) > 0.5) {
+          pts.push({ t: point.t, p: point.p });
+        }
+      }
+    }
+    if (anchors > 0) {
+      while (pts.length < anchors && d.hover) {
+        pts.push({ t: d.hover.t, p: d.hover.p });
+      }
+      pts = pts.slice(0, anchors);
+      if (pts.length < anchors && !force) {
+        this.buildPreview();
+        return null;
+      }
+    }
+    if ((anchors === 0 || anchors === -1) && pts.length < 2) {
+      this.cancelDraft();
+      return null;
+    }
+    const type = d.type;
+    this._draft = null;
+    this.drawings.preview = null;
+    const extra = {};
+    if (type === 'sticker') extra.emoji = this.services.getStickerEmoji?.() || '😀';
+    const shape = this.drawings.add({ type, points: pts, ...extra });
+    this.chart.requestRender();
+    if (shape) {
+      this.services.onToolConsumed?.(this);
+      if (TEXT_TYPES.has(shape.type)) this.editShapeText(shape, { fresh: true });
+    }
+    return shape;
+  }
+
+  clearMeasure() {
+    clearTimeout(this._measureTimer);
+    this._measureTimer = null;
+    this._measure = null;
+    if (this.drawings.preview && (this.drawings.preview.type === 'measure' || this.drawings.preview.type === 'zoom')) {
+      this.drawings.preview = null;
+      this.chart.requestRender();
+    }
+  }
+
+  startMeasure(point) {
+    this.clearMeasure();
+    const type = this.tool;
+    const first = { t: point.t, p: point.p };
+    this._measure = {
+      type,
+      points: [first, { ...first }],
+      downX: point.x,
+      downY: point.y,
+      moved: false,
+    };
+    this.drawings.preview = { type, points: this._measure.points, color: type === 'zoom' ? '#2962ff' : '#26a69a' };
+    this.chart.requestRender();
+  }
+
+  finishMeasure() {
+    const m = this._measure;
+    if (!m) return;
+    this._measure = null;
+    const [a, b] = m.points;
+    if (!m.moved) {
+      this.drawings.preview = null;
+      this.chart.requestRender();
+      return;
+    }
+    if (m.type === 'zoom') {
+      this.drawings.preview = null;
+      const t1 = Math.min(a.t, b.t);
+      const t2 = Math.max(a.t, b.t);
+      if (t2 > t1) this.chart.setViewByTime(t1, t2);
+      this.chart.requestRender();
+    } else {
+      this.drawings.preview = { type: 'measure', points: [{ ...a }, { ...b }], color: '#26a69a' };
+      this._measureTimer = setTimeout(() => {
+        this.drawings.preview = null;
+        this.chart.requestRender();
+      }, 4000);
+      this.chart.requestRender();
+    }
+    this.services.onToolConsumed?.(this);
+  }
+
+  editShapeText(shape, { fresh = false } = {}) {
+    if (!shape) return;
+    this._editor?.close();
+    const project = this.chart.projector();
+    const pt = shape.points[0];
+    if (!pt) return;
+    const x = project.x(pt.t);
+    const y = project.y(pt.p);
+    this._editor = openInlineEditor(this.el, {
+      x: Math.min(x + 8, this.chart.plotR - 60),
+      y: Math.max(6, y - 28),
+      value: fresh ? '' : (shape.text || ''),
+      fontSize: shape.fontSize || 12,
+      color: shape.color || '#d1d4dc',
+      onCommit: (text) => {
+        this._editor = null;
+        this.drawings.begin();
+        this.drawings.update(shape.id, { text }, { commit: false });
+        this.drawings.commit();
+        this.chart.requestRender();
+      },
+      onCancel: () => { this._editor = null; },
+    });
+  }
+
+  updateCursor(x, y) {
+    if (this.tool) return;
+    const project = this.chart.projector();
+    const handle = this.drawings.handleAt(x, y, project);
+    if (handle) {
+      this.canvas.style.cursor = 'crosshair';
+      return;
+    }
+    const hit = this.drawings.hitTest(x, y, project, { includeLocked: true });
+    if (hit) this.canvas.style.cursor = this.drawings.isLocked(hit) ? 'not-allowed' : 'move';
+    else this.canvas.style.cursor = '';
+  }
+
+  handleKey(e) {
+    if (e.key === 'Escape') {
+      if (this._draft) { this.cancelDraft(); return true; }
+      if (this._measure) { this.clearMeasure(); return true; }
+      if (this._editor) { this._editor.close(); return true; }
+      if (this.drawings.selectedIds.size) { this.drawings.clearSelection(); return true; }
+      return false;
+    }
+    if (e.key === 'Enter') {
+      if (this._draft) { this.finishDraft(); return true; }
+      const s = this.drawings.selectedShape();
+      if (s && TEXT_TYPES.has(s.type)) { this.editShapeText(s); return true; }
+      return false;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (this.drawings.selectedIds.size) {
+        this.drawings.removeSelected();
+        this.chart.requestRender();
+        return true;
+      }
+      return false;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'z') {
+      if (e.shiftKey) this.drawings.redo();
+      else this.drawings.undo();
+      this.chart.requestRender();
+      return true;
+    }
+    if (mod && e.key.toLowerCase() === 'y') {
+      this.drawings.redo();
+      this.chart.requestRender();
+      return true;
+    }
+    if (mod && e.key.toLowerCase() === 'c') {
+      this.drawings.copySelected();
+      return true;
+    }
+    if (mod && e.key.toLowerCase() === 'v') {
+      this.drawings.paste();
+      this.chart.requestRender();
+      return true;
+    }
+    if (mod && e.key.toLowerCase() === 'd') {
+      this.drawings.duplicateSelected();
+      this.chart.requestRender();
+      return true;
+    }
+    return false;
   }
 
   bindDrawing() {
@@ -439,105 +705,230 @@ export class ChartPane {
       'pointerdown',
       (e) => {
         if (e.button !== 0) return;
-        if (e.target.closest('.pane-link') || e.target.closest('.replay-bar')) return;
-        const { x, y } = this.xy(e);
+        if (!this.data) return;
+        if (e.target.closest('.pane-link') || e.target.closest('.replay-bar') || e.target.closest('.draw-props') || e.target.closest('.inline-editor')) return;
+        const point = this.pointAt(e);
 
-        if (this.tool) {
+        if (this.tool === 'eraser') {
           e.stopPropagation();
           e.preventDefault();
-          const p = this.chart.dataAt(x, y);
-          this._draft = {
-            type: this.tool,
-            t1: p.time, p1: p.price, t2: p.time, p2: p.price,
-            _sx: x, _sy: y, _moved: false,
-          };
-          this.drawings.preview = this._draft;
-          this.chart.requestRender();
-          this.canvas.setPointerCapture?.(e.pointerId);
+          const hit = this.drawings.hitTest(point.x, point.y, point.project);
+          if (hit) {
+            this.drawings.remove(hit.id);
+            this.chart.requestRender();
+            this.services.onToolConsumed?.(this);
+          }
           return;
         }
 
-        const hitId = this.drawings.hitTest(x, y, this.chart.projector());
-        if (hitId) {
+        if (this.tool === 'measure' || this.tool === 'zoom') {
           e.stopPropagation();
           e.preventDefault();
-          this.drawings.selectedId = hitId;
-          const p = this.chart.dataAt(x, y);
-          this._drag = { id: hitId, lastIndex: p.index, lastPrice: p.price };
-          this.chart.requestRender();
-        } else if (this.drawings.selectedId) {
-          this.drawings.selectedId = null;
-          this.chart.requestRender();
+          this.startMeasure(point);
+          return;
         }
+
+        const def = this.tool ? toolDef(this.tool) : null;
+        if (def && def.kind === 'draw') {
+          e.stopPropagation();
+          e.preventDefault();
+          if (!this._draft) {
+            this.startDraft(point);
+          } else {
+            this.addDraftPoint(point);
+          }
+          return;
+        }
+
+        const handle = this.drawings.handleAt(point.x, point.y, point.project);
+        if (handle) {
+          e.stopPropagation();
+          e.preventDefault();
+          this.drawings.begin();
+          this._action = { kind: 'handle', id: handle.shape.id, index: handle.handle.index };
+          return;
+        }
+
+        const hit = this.drawings.hitTest(point.x, point.y, point.project);
+        if (hit) {
+          e.stopPropagation();
+          e.preventDefault();
+          if (e.shiftKey) this.drawings.select(hit.id, { additive: true });
+          else if (!this.drawings.selectedIds.has(hit.id)) this.drawings.select(hit.id);
+          this.drawings.begin();
+          this._action = { kind: 'move', lastIndex: point.index, lastPrice: point.price };
+          this.chart.requestRender();
+          return;
+        }
+
+        if (this.drawings.selectedIds.size) this.drawings.clearSelection();
       },
       true,
     );
 
     this._onMove = (e) => {
-      if (!this._draft && !this._drag) return;
-      const { x, y } = this.xy(e);
-
       if (this._draft) {
-        if (Math.hypot(x - this._draft._sx, y - this._draft._sy) > 3) this._draft._moved = true;
-        const p = this.chart.dataAt(x, y);
-        this._draft.t2 = p.time;
-        this._draft.p2 = p.price;
-        this.drawings.preview = this._draft;
+        const d = this._draft;
+        const point = this.pointAt(e, { snap: d.type !== 'brush' && d.type !== 'highlighter' });
+        d.moved = Math.hypot(point.x - d.downX, point.y - d.downY) > 3 || d.moved;
+        if (d.freehand) {
+          const last = d.points[d.points.length - 1];
+          if (!last || Math.hypot(point.x - this.chart.projector().x(last.t), point.y - this.chart.projector().y(last.p)) > 2) {
+            d.points.push({ t: point.t, p: point.p });
+          }
+        } else if (d.def.anchors === 1) {
+          d.points[0] = { t: point.t, p: point.p };
+        } else {
+          d.hover = { t: point.t, p: point.p };
+        }
+        this.buildPreview();
         this.chart.requestRender();
         return;
       }
 
-      if (this._drag) {
-        const p = this.chart.dataAt(x, y);
-        const dPrice = p.price - this._drag.lastPrice;
-        const dIndex = p.index - this._drag.lastIndex;
-        if (dPrice !== 0 || dIndex !== 0) {
-          this.drawings.move(this._drag.id, dPrice, dIndex, this.chart.projector());
-          this._drag.lastPrice = p.price;
-          this._drag.lastIndex = p.index;
-          this.chart.requestRender();
-        }
+      if (this._measure) {
+        const point = this.pointAt(e);
+        this._measure.points[1] = { t: point.t, p: point.p };
+        this._measure.moved = Math.hypot(point.x - this._measure.downX, point.y - this._measure.downY) > 3 || this._measure.moved;
+        this.drawings.preview = {
+          type: this._measure.type,
+          points: this._measure.points,
+          color: this._measure.type === 'zoom' ? '#2962ff' : '#26a69a',
+        };
+        this.chart.requestRender();
+        return;
       }
+
+      if (this._action) {
+        const point = this.pointAt(e);
+        if (this._action.kind === 'handle') {
+          this.drawings.setPoint(this._action.id, this._action.index, point.t, point.p);
+        } else {
+          const dPrice = point.price - this._action.lastPrice;
+          const dIndex = point.index - this._action.lastIndex;
+          if (dPrice !== 0 || dIndex !== 0) {
+            this.drawings.moveSelected(dPrice, dIndex, this.chart.projector());
+            this._action.lastPrice = point.price;
+            this._action.lastIndex = point.index;
+          }
+        }
+        this.chart.requestRender();
+        return;
+      }
+
+      this.updateCursor(this.xy(e).x, this.xy(e).y);
     };
 
-    this._onUp = () => {
+    this._onUp = (e) => {
       if (this._draft) {
-        const shape = this.draftToShape(this._draft);
-        const ok = this._draft.type === 'hline' || this._draft._moved;
-        this.drawings.preview = null;
-        if (ok && shape) {
-          this.drawings.add(shape);
-          this.services.onToolConsumed?.(this);
+        const d = this._draft;
+        const wasPressed = d.pressed;
+        d.pressed = false;
+        if (!wasPressed) return;
+        const point = this.pointAt(e, { snap: d.type !== 'brush' && d.type !== 'highlighter' });
+        if (d.freehand) {
+          this.finishDraft();
+        } else if (d.def.anchors === 1) {
+          this.finishDraft(point);
+        } else if (d.def.anchors === 2 && d.moved) {
+          this.finishDraft(point);
+        } else {
+          d.hover = null;
+          this.buildPreview();
+          this.chart.requestRender();
         }
-        this._draft = null;
-        this.chart.requestRender();
+        return;
       }
-      if (this._drag) {
-        this.drawings.persist();
-        this._drag = null;
+
+      if (this._measure) {
+        this.finishMeasure();
+        return;
+      }
+
+      if (this._action) {
+        this.drawings.commit();
+        this._action = null;
+        this.chart.requestRender();
       }
     };
 
     window.addEventListener('pointermove', this._onMove);
     window.addEventListener('pointerup', this._onUp);
 
+    this.el.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.draw-props') || e.target.closest('.inline-editor')) return;
+      if (this._draft && (this._draft.def.anchors === -1 || this._draft.def.anchors === 0)) {
+        const pts = this._draft.points;
+        if (pts.length > 2) {
+          const a = pts[pts.length - 1];
+          const b = pts[pts.length - 2];
+          const project = this.chart.projector();
+          if (Math.hypot(project.x(a.t) - project.x(b.t), project.y(a.p) - project.y(b.p)) < 3) pts.pop();
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        this.finishDraft();
+        return;
+      }
+      const { x, y } = this.xy(e);
+      const hit = this.drawings.hitTest(x, y, this.chart.projector());
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.drawings.select(hit.id);
+        if (TEXT_TYPES.has(hit.type)) this.editShapeText(hit);
+      }
+    }, true);
+
     this.canvas.addEventListener('contextmenu', (e) => {
       if (!this.data) return;
+      e.preventDefault();
+      e.stopPropagation();
       const { x, y } = this.xy(e);
-      const hitId = this.drawings.hitTest(x, y, this.chart.projector());
-      if (hitId) {
-        e.preventDefault();
-        this.drawings.remove(hitId);
-        this.chart.requestRender();
+      const project = this.chart.projector();
+      const hit = this.drawings.hitTest(x, y, project, { includeLocked: true });
+      if (hit) {
+        this.drawings.select(hit.id);
+        this.drawingPanel.refresh(true);
+        openContextMenu(e.clientX, e.clientY, [
+          { label: 'Edit properties', action: () => this.drawingPanel.refresh(true) },
+          { label: 'Duplicate', action: () => { this.drawings.duplicateSelected(); this.chart.requestRender(); } },
+          { label: 'Copy', action: () => this.drawings.copySelected() },
+          { separator: true },
+          { label: 'Bring to front', action: () => this.drawings.bringToFront() },
+          { label: 'Send to back', action: () => this.drawings.sendToBack() },
+          { separator: true },
+          {
+            label: this.drawings.lockedAll ? 'Unlock all drawings' : (hit.locked ? 'Unlock' : 'Lock'),
+            action: () => {
+              if (this.drawings.lockedAll) this.drawings.setLockedAll(false);
+              else this.drawings.toggleLockSelected();
+            },
+          },
+          {
+            label: hit.hidden ? 'Show' : 'Hide',
+            action: () => { this.drawings.toggleHideSelected(); this.chart.requestRender(); },
+          },
+          { separator: true },
+          { label: 'Delete', danger: true, action: () => { this.drawings.removeSelected(); this.chart.requestRender(); } },
+        ]);
+        return;
       }
+      const hiddenCount = this.drawings.shapes.filter((s) => s.hidden).length;
+      openContextMenu(e.clientX, e.clientY, [
+        { label: 'Paste', disabled: !this.drawings.clipboard.length, action: () => { this.drawings.paste(); this.chart.requestRender(); } },
+        { label: 'Select all drawings', action: () => this.drawings.selectAll() },
+        { separator: true },
+        { label: this.drawings.hiddenAll ? 'Show all drawings' : 'Hide all drawings', action: () => { this.drawings.setHiddenAll(!this.drawings.hiddenAll); this.chart.requestRender(); } },
+        { label: hiddenCount ? `Show ${hiddenCount} hidden` : 'Show hidden drawings', disabled: !hiddenCount, action: () => { for (const s of this.drawings.shapes) s.hidden = false; this.drawings.persist(); this.chart.requestRender(); } },
+        { label: this.drawings.lockedAll ? 'Unlock all drawings' : 'Lock all drawings', action: () => { this.drawings.setLockedAll(!this.drawings.lockedAll); this.chart.requestRender(); } },
+        { separator: true },
+        { label: 'Remove all drawings', danger: true, action: () => { this.drawings.removeAll(); this.chart.requestRender(); } },
+      ]);
     });
 
     this.canvas.addEventListener('pointerleave', () => {
-      if (this._draft) {
-        this._draft = null;
-        this.drawings.preview = null;
-        this.chart.requestRender();
-      }
+      if (!this.tool) this.canvas.style.cursor = '';
     });
   }
 

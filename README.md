@@ -88,10 +88,25 @@ Node 18+ is the only requirement. Nothing to install, no build step.
 - Replay is per chart, so a 2×2 can replay one cell while others stay live
 
 **Drawing**
-- Trend line, horizontal line, rectangle, Fibonacci retracement
-- Click to select, drag to move, right-click to delete, `Ctrl+Z` to undo
-- Saved per symbol in browser storage, anchored to real timestamps so they
-  survive zoom, pan and timeframe changes
+- TradingView-style left toolbar with eight flyout categories: Cursor, Trend
+  Line, Fibonacci & Gann, Patterns, Forecasting & Measurement, Geometric
+  Shapes, Text & Annotation, and Icons & Stickers (85 drawing tools)
+- Draw by dragging or by clicking anchors; multi-point tools finish on the
+  last click, paths/brush finish on double-click or `Enter`
+- Fibonacci retracement/extension/time/channel/fan/circles/spiral/arcs/wedge,
+  pitchforks, Gann box/square/fan, XABCD/ABCD/elliott/head-and-shoulders,
+  channels, ranges, volume profile, anchored VWAP, text notes and stickers
+- Long/Short/Position Forecast show entry, stop, target, R:R, risk %, size,
+  potential profit and loss, recalculated while the level handles are dragged
+- Every drawing is anchored to timestamp and price, so it survives zoom, pan,
+  timeframe and chart-type changes
+- Select, move, resize, duplicate, copy/paste, delete; per-drawing color, line
+  width, line style, fill opacity and text size; properties persist per symbol
+- Magnet off/weak/strong, stay-in-drawing-mode, lock/unlock all, hide/show all
+  (hidden drawings are kept), remove selected/all, undo/redo
+- Measure and zoom tools; right-click context menu; inline text editor
+- Saved per symbol in browser storage (`tvfree.drawings.v2:<symbol>`), with
+  automatic migration from the old flat format
 
 **Watchlist**
 - Click any row to load it into the focused chart; `+` adds the current symbol;
@@ -148,8 +163,18 @@ to the last good copy.
 | `Ctrl+,` | settings |
 | `F11` | fullscreen |
 | `Esc` | cancel tool / deselect / close popovers |
-| `Delete` | delete selected drawing |
+| `Delete`, `Backspace` | delete selected drawing |
 | `Ctrl+Z` | undo drawing |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | redo drawing |
+| `Ctrl+C` / `Ctrl+V` / `Ctrl+D` | copy / paste / duplicate drawing |
+| `Alt+T` | trend line |
+| `Alt+H` / `Alt+V` | horizontal / vertical line |
+| `Alt+R` | rectangle |
+| `Alt+F` | fib retracement |
+| `Alt+X` | text |
+| `Alt+P` | long position |
+| `Alt+C` | parallel channel |
+| `Alt+M` | measure |
 
 Page zoom is left to the browser (`Ctrl+±/0`), which is what Desktop's page
 zoom does too.
@@ -166,7 +191,14 @@ public/js/pane.js        one chart cell: engine + legend + drawings + replay
 public/js/workspace.js   a tab: layout grid, 1–4 panes, serialization
 public/js/indicators.js  SMA/EMA/RSI/MACD/Bollinger/VWAP maths
 public/js/indicator-defs.js  indicator registry shared by panes
-public/js/drawings.js    drawing model, rendering, hit-testing
+public/js/drawings.js    public drawing API (re-exports the modules below)
+public/js/drawings/registry.js  tool ids, labels, anchors, categories
+public/js/drawings/store.js     per-symbol storage, settings, clipboard, migration
+public/js/drawings/geometry.js  projection, clipping and distance helpers
+public/js/drawings/render.js    drawing, hit-testing and position metrics
+public/js/drawings/engine.js    selection, history, magnet, CRUD
+public/js/drawbar.js     left drawing toolbar, flyouts, management buttons
+public/js/drawing-ui.js  properties panel, context menu, inline text editor
 public/js/linking.js     link groups: per-group channels, focus gate, debounce
 public/js/alerts.js      alert panel, SSE client, notifications, settings
 public/js/settings.js    local app settings (saveSymbolInterval, alert sound)

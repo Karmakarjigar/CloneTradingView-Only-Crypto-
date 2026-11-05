@@ -85,3 +85,29 @@ alerts and trading UI. Data trust was server-only and went first.
       repeating socket error logs once per 30 s (was one line per retry)
 - [ ] Unverified and left as-is: indicator maths, replay stepping, alert
       evaluation, paper fills, crosshair rendering — not present in the shell
+
+## 8. Drawing toolbar + engine  (drawings/*, drawbar.js, drawing-ui.js) — done
+- [x] Split the single drawing file into registry / store / geometry / render /
+      engine modules, with `drawings.js` kept as the public facade
+- [x] Eight left-toolbar categories with hover/click flyouts, icons, shortcuts,
+      tooltips, active-tool and last-tool-per-group highlighting
+- [x] 85 drawing tools: trend/ray/channel, Fibonacci + pitchfork + Gann,
+      patterns/Elliott, forecasting + ranges + volume profile, geometric
+      shapes, text/annotations, stickers; measure and box zoom
+- [x] Anchor creation by drag or click-click; multi-point tools finish on the
+      last anchor, freehand on release, paths on double-click/Enter
+- [x] Selection, move, per-anchor resize, erase, copy/paste/duplicate,
+      bring-to-front/back, inline text editor and right-click context menu
+- [x] Per-drawing color, width, line style, fill opacity, text size, emoji;
+      properties panel edits and persists per symbol
+- [x] Magnet off/weak/strong with OHLC + bar-time snapping, stay-in-mode,
+      lock/unlock all, hide/show all (non-destructive), remove selected/all
+- [x] Undo/redo snapshots per gesture; settings/clipboard in localStorage;
+      v1 flat drawings auto-migrate to v2 timestamp/price anchors
+- [x] Long/Short/Position Forecast compute entry, stop, target, R:R, risk %,
+      size, profit/loss live from the dragged levels
+- [x] Verified headlessly (50 checks): all 8 flyouts, all 85 tools render and
+      hit-test, drag and click creation, stay mode, pointer move/resize,
+      eraser, context/remove menus, sticker emoji, inline text, property edits,
+      zoom/timeframe anchor stability, magnet snapping, hide/lock, undo/redo,
+      persistence across reload, zero console errors; screenshots reviewed
