@@ -132,3 +132,22 @@ alerts and trading UI. Data trust was server-only and went first.
       tick-vs-kline recency, real trade-to-bar latency, stable watchlist DOM,
       a new 1m bar created by a trade 48–89 ms after the bucket, zero console
       errors; 50/50 drawings and 24/24 UI parity suites still pass
+
+## 10. TradingView-style axis zoom  (chart.js, pane.js) - done
+- [x] Price-axis drag follows lightweight-charts: invert the drag around the
+      pane height, apply `(start + (h-1)*0.2) / (current + (h-1)*0.2)` with a
+      0.1 floor, and scale the snapshot range around its center. Dragging up
+      stretches the chart, dragging down compresses it
+- [x] Manual price range is pinned (`priceLock`) so live bars and pans no
+      longer auto-fit it; it resets on double-click, double-clicking the plot,
+      or a symbol/timeframe load
+- [x] Wheel over the price axis zooms around the cursor price; wheel over the
+      plot/time axis keeps the existing time zoom
+- [x] Time-axis drag changes bar spacing with
+      `span * (width - startX) / (width - currentX)`, anchored to the right edge
+- [x] `ns-resize` / `ew-resize` cursors over the axes, axis drags never start
+      drawings even while a tool is active, and vertical drags never pan time
+- [x] Verified headlessly (25 checks): up/down scaling and center anchoring,
+      wheel in/out, both reset paths, locked right edge, interval reload,
+      cursor affordances, active-tool isolation, zero console errors; 50/50
+      drawings and 24/24 UI parity suites still pass

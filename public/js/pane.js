@@ -777,6 +777,12 @@ export class ChartPane {
   }
 
   updateCursor(x, y) {
+    const dragging = this.chart.axisDragging;
+    const axis = dragging || this.chart.axisAt?.(x, y);
+    if (axis) {
+      this.canvas.style.cursor = axis === 'price' ? 'ns-resize' : 'ew-resize';
+      return;
+    }
     if (this.tool) return;
     const project = this.chart.projector();
     const handle = this.drawings.handleAt(x, y, project);
@@ -847,6 +853,8 @@ export class ChartPane {
         if (e.button !== 0) return;
         if (!this.data) return;
         if (e.target.closest('.pane-link') || e.target.closest('.replay-bar') || e.target.closest('.draw-props') || e.target.closest('.inline-editor')) return;
+        const raw = this.xy(e);
+        if (this.chart.axisAt?.(raw.x, raw.y)) return;
         const point = this.pointAt(e);
 
         if (this.tool === 'eraser') {

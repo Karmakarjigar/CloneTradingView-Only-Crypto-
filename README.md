@@ -18,6 +18,9 @@ Node 18+ is the only requirement. Nothing to install, no build step.
 **Charting**
 - Candlesticks, wicks, volume pane, last-price line, watermark
 - Pan (drag), zoom (wheel), fit (double-click)
+- Drag the price axis up to stretch / down to compress the chart vertically;
+  drag the time axis to change bar spacing. Wheel over an axis zooms just that
+  axis, and double-clicking an axis resets it (double-click the plot resets both)
 - Crosshair with time and price tags, OHLCV legend that follows the cursor
 - Timeframes: `1m 5m 15m 30m 1h 4h 1D 1W` (`4h` is aggregated from hourly,
   anchored to each exchange session's first bar)

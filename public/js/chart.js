@@ -85,6 +85,8 @@ export class Chart {
     this._pan = null;
     this._raf = 0;
     this._projection = null;
+    this._axisDrag = null;
+    this.priceLock = null;
 
     this._bind();
     this.resize();
@@ -103,6 +105,7 @@ export class Chart {
       source: payload.source || '',
     };
     this.interval = payload.interval || this.interval;
+    this.priceLock = null;
     this.fit();
   }
 
@@ -318,6 +321,29 @@ export class Chart {
     return list[0];
   }
 
+  /** Which axis, if any, sits under a canvas-relative point. */
+  axisAt(x, y) {
+    if (!this.W || !this.H) return null;
+    const bottom = this.H - TIME_H;
+    if (y >= bottom) return 'time';
+    if (x >= this.plotR) {
+      const main = this.computeLayout().list[0];
+      if (y >= main.top && y <= main.top + main.height) return 'price';
+    }
+    return null;
+  }
+
+  /** Kind of axis drag in progress ('price', 'time', or null). */
+  get axisDragging() {
+    return this._axisDrag ? this._axisDrag.kind : null;
+  }
+
+  /** Return the main price scale to auto-fit. */
+  resetPriceScale() {
+    this.priceLock = null;
+    this.requestRender();
+  }
+
   visibleRange() {
     const n = this.count;
     const from = Math.max(0, Math.floor(this.view.from));
@@ -425,6 +451,13 @@ export class Chart {
     const pad = (max - min) * 0.08;
     min -= pad;
     max += pad;
+
+    // A manual price-axis gesture pins the scale until it is reset.
+    const lock = this.priceLock;
+    if (lock && Number.isFinite(lock.min) && Number.isFinite(lock.max) && lock.max > lock.min) {
+      min = lock.min;
+      max = lock.max;
+    }
 
     const main = { min, max };
     this.mainScale = main;
@@ -1076,9 +1109,17 @@ export class Chart {
       e.preventDefault();
       const rect = c.getBoundingClientRect();
       const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+
+      // Wheel over an axis zooms that axis, like TradingView.
+      if (this.axisAt(x, y) === 'price') {
+        this._zoomPriceAt(y, factor);
+        return;
+      }
+
       const anchor = this.indexAtX(x);
       const span = this.view.to - this.view.from;
-      const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
       const nextSpan = clamp(span * factor, 12, Math.max(60, this.bars.length * 3));
       const ratio = (anchor - this.view.from) / (span || 1);
       this.view.from = anchor - ratio * nextSpan;
@@ -1089,11 +1130,35 @@ export class Chart {
     }, { passive: false });
 
     c.addEventListener('pointerdown', (e) => {
-      if (this.pointerMode !== 'pan') return;
       if (e.button !== 0 && e.button !== 1) return;
       const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const axis = this.axisAt(x, y);
+
+      if (axis === 'price' && e.button === 0) {
+        e.preventDefault();
+        this._startPriceDrag(y);
+        c.setPointerCapture(e.pointerId);
+        return;
+      }
+      if (axis === 'time' && e.button === 0) {
+        e.preventDefault();
+        this._axisDrag = {
+          kind: 'time',
+          startX: x,
+          span: this.view.to - this.view.from,
+          to: this.view.to,
+          width: Math.max(1, this.plotW),
+        };
+        c.style.cursor = 'ew-resize';
+        c.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      if (this.pointerMode !== 'pan') return;
       this._pan = {
-        startX: e.clientX - rect.left,
+        startX: x,
         from: this.view.from,
         to: this.view.to,
       };
@@ -1106,6 +1171,17 @@ export class Chart {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
+      if (this._axisDrag) {
+        if (this._axisDrag.kind === 'price') {
+          this._scalePriceTo(y);
+          c.style.cursor = 'ns-resize';
+        } else {
+          this._scaleTimeTo(x);
+          c.style.cursor = 'ew-resize';
+        }
+        return;
+      }
+
       if (this._pan) {
         const dx = x - this._pan.startX;
         const shift = -dx / (this.candleW || 1);
@@ -1115,6 +1191,11 @@ export class Chart {
         this.requestRender();
         this.emitView();
       }
+
+      const axis = this.axisAt(x, y);
+      if (axis === 'price') c.style.cursor = 'ns-resize';
+      else if (axis === 'time') c.style.cursor = 'ew-resize';
+      else if (c.style.cursor === 'ns-resize' || c.style.cursor === 'ew-resize') c.style.cursor = '';
 
       this.hover.active = true;
       this.hover.x = x;
@@ -1126,6 +1207,13 @@ export class Chart {
     });
 
     const end = (e) => {
+      if (this._axisDrag) {
+        this._axisDrag = null;
+        try { c.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        const rect = c.getBoundingClientRect();
+        const axis = this.axisAt(e.clientX - rect.left, e.clientY - rect.top);
+        c.style.cursor = axis === 'price' ? 'ns-resize' : axis === 'time' ? 'ew-resize' : '';
+      }
       if (this._pan) {
         this._pan = null;
         c.classList.remove('panning');
@@ -1137,11 +1225,27 @@ export class Chart {
 
     c.addEventListener('pointerleave', () => {
       this.hover.active = false;
+      if (!this._axisDrag && (c.style.cursor === 'ns-resize' || c.style.cursor === 'ew-resize')) {
+        c.style.cursor = '';
+      }
       this.requestRender();
       this.emitHover();
     });
 
-    c.addEventListener('dblclick', () => this.fit());
+    c.addEventListener('dblclick', (e) => {
+      const rect = c.getBoundingClientRect();
+      const axis = this.axisAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (axis === 'price') {
+        this.resetPriceScale();
+        return;
+      }
+      if (axis === 'time') {
+        this.fit();
+        return;
+      }
+      this.resetPriceScale();
+      this.fit();
+    });
 
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => this.resize());
@@ -1150,6 +1254,68 @@ export class Chart {
       this._winResize = () => this.resize();
       window.addEventListener('resize', this._winResize);
     }
+  }
+
+  /* ---------------- axis zoom ---------------- */
+
+  _startPriceDrag(y) {
+    const main = this.computeLayout().list[0];
+    const sc = this.priceLock || this.mainScale || { min: 0, max: 1 };
+    this._axisDrag = {
+      kind: 'price',
+      height: Math.max(2, main.height),
+      startInverted: Math.max(0, main.height - y),
+      from: { min: sc.min, max: sc.max },
+    };
+    this.canvas.style.cursor = 'ns-resize';
+  }
+
+  /** Drag up to stretch (zoom in), drag down to compress (zoom out). */
+  _scalePriceTo(y) {
+    const d = this._axisDrag;
+    if (!d || d.kind !== 'price') return;
+    const h = d.height;
+    let inverted = h - y;
+    if (inverted < 0) inverted = 0;
+    const bias = (h - 1) * 0.2;
+    const coeff = Math.max(0.1, (d.startInverted + bias) / (inverted + bias));
+    const from = d.from;
+    const center = (from.min + from.max) * 0.5;
+    const half = (from.max - from.min) * 0.5 * coeff;
+    if (!Number.isFinite(half) || half <= 0) return;
+    this.priceLock = { min: center - half, max: center + half };
+    this.requestRender();
+  }
+
+  /** Drag the time axis: bar spacing follows distance from the right edge. */
+  _scaleTimeTo(x) {
+    const d = this._axisDrag;
+    if (!d || d.kind !== 'time') return;
+    const width = d.width;
+    const startLength = clamp(width - d.startX, 1, width);
+    const currentLength = clamp(width - x, 1, width);
+    const maxSpan = Math.max(60, this.count * 3);
+    const span = clamp(d.span * (startLength / currentLength), 10, maxSpan);
+    this.view.to = d.to;
+    this.view.from = d.to - span;
+    this.clampView();
+    this.requestRender();
+    this.emitView();
+  }
+
+  /** Wheel zoom on the price axis, anchored at the cursor price. */
+  _zoomPriceAt(y, factor) {
+    const main = this.computeLayout().list[0];
+    const sc = this.priceLock || this.mainScale || { min: 0, max: 1 };
+    const span = sc.max - sc.min;
+    if (!(span > 0)) return;
+    const anchor = this.priceForY(y, main, sc);
+    const t = (anchor - sc.min) / span;
+    const nextSpan = span * factor;
+    const min = anchor - t * nextSpan;
+    if (!Number.isFinite(min) || !Number.isFinite(nextSpan) || nextSpan <= 0) return;
+    this.priceLock = { min, max: min + nextSpan };
+    this.requestRender();
   }
 
   dispose() {
