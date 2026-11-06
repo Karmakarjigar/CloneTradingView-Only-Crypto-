@@ -1,15 +1,47 @@
-# TVFREE
+# CloneTradingView
 
 A local charting terminal with a TradingView-shaped workflow, running on free
-market data. No account, no subscription, no Electron bundle — a small Node
-server and a canvas chart engine.
+Binance market data. No account, no subscription. Ships as an installable
+Windows desktop app, and the same chart still runs from a tiny Node server if
+you prefer a browser.
+
+## Install (Windows)
+
+1. Download `CloneTradingView-Setup-<version>.exe` (built into `dist/`).
+2. Run it and choose an install folder if you want one.
+3. Launch **CloneTradingView** from the Start Menu or desktop shortcut.
+
+The installed app starts its own local chart server on a free loopback port
+(`5577` and up), then opens the chart in a desktop window. Alerts, drawings and
+market cache live in `%APPDATA%\CloneTradingView`, so they survive upgrades.
+Uninstall through **Settings → Apps → CloneTradingView**.
+
+The installer is unsigned, so Windows SmartScreen may show “Unknown publisher”
+the first time. Choose **More info → Run anyway**, or build it yourself below.
+
+## Run from source
 
 ```
-start.bat                 # or: node server.js --open
+start.bat                 # or: npm start
 http://127.0.0.1:5577
 ```
 
-Node 18+ is the only requirement. Nothing to install, no build step.
+For server/browser mode, Node 18+ is the only requirement — nothing to install
+and no build step. The desktop shell and installer use Electron:
+
+```
+npm install
+npm run desktop           # dev desktop window
+npm run dist              # build dist/CloneTradingView-Setup-<version>.exe
+```
+
+If Electron or the NSIS tooling downloads slowly, point the build at a mirror:
+
+```
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+$env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm run dist
+```
 
 ---
 
@@ -196,6 +228,7 @@ zoom does too.
 
 ```
 server.js                HTTP server, static files, APIs, SSE, alert loop
+desktop/main.js          Electron shell: starts the server, opens the app window
 lib/market.js            Binance adapter, normalization, aggregation
 lib/cache.js             memory + disk cache with stale fallback
 lib/alerts.js            durable alert store, evaluator, delivery settings

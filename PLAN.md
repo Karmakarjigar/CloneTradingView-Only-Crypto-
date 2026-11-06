@@ -151,3 +151,27 @@ alerts and trading UI. Data trust was server-only and went first.
       wheel in/out, both reset paths, locked right edge, interval reload,
       cursor affordances, active-tool isolation, zero console errors; 50/50
       drawings and 24/24 UI parity suites still pass
+
+## 11. Installable Windows desktop app  (desktop/main.js, package.json, build/) - done
+- [x] Electron 45.2.3 shell starts `server.js` as an `ELECTRON_RUN_AS_NODE`
+      child on the first free loopback port from 5577 upward, waits for
+      `/api/health`, then opens the chart in a normal desktop window
+- [x] Packaged server runs from `resources/app-server`; alerts and market cache
+      go to `%APPDATA%\CloneTradingView` via new `TVFREE_DATA_DIR` /
+      `TVFREE_CACHE_DIR` overrides, so an install under Program Files is
+      writable and state survives upgrades
+- [x] Single-instance lock, second launch focuses the existing window, external
+      links open in the browser, F12 devtools, graceful server shutdown, and a
+      rotating `desktop.log` next to the app data
+- [x] electron-builder NSIS target: assisted install, per-user (no admin),
+      custom install folder, Start Menu + desktop shortcuts, uninstaller keeps
+      app data
+- [x] Added a generated multi-size `build/icon.ico` (256 px down to 16 px) and
+      matching PNG, produced by `build/make-icon.ps1` with no external tools
+- [x] Branded window title/header as CloneTradingView while keeping existing
+      `tvfree.*` storage keys so saved workspaces/drawings are not lost
+- [x] Verified: `npm run desktop` serves on 5577 and opens the window; packaged
+      `win-unpacked` app boots from `resources/app-server`; the built installer
+      installs silently, launches, serves `/api/health`, and uninstalls cleanly
+- [x] Artifact: `dist/CloneTradingView-Setup-1.0.0.exe` (~121 MB, unsigned —
+      SmartScreen "Unknown publisher" is expected); `dist/` stays out of git

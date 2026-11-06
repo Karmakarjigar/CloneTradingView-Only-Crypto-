@@ -517,7 +517,7 @@ function syncChrome(payload, ms) {
   $('sourceBadge').textContent = payload.source === 'binance' ? 'BINANCE' : 'YAHOO';
   $('barCount').textContent = `${payload.bars.length} bars`;
   if (ms != null) $('latencyText').textContent = `${ms} ms`;
-  document.title = `${payload.symbol} — TVFREE`;
+  document.title = `${payload.symbol} - CloneTradingView`;
 }
 
 function updateLinkState() {

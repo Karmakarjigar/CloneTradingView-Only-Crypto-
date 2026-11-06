@@ -462,7 +462,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   const address = `http://127.0.0.1:${PORT}`;
   console.log('');
-  console.log('  TVFREE  —  local charting terminal');
+  console.log('  CloneTradingView  —  local charting terminal');
   console.log(`  ${address}`);
   console.log('');
   console.log('  data: Binance public REST + WebSocket (crypto-only build)');

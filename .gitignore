@@ -2,6 +2,7 @@
 .cache/
 data/alerts.json
 node_modules/
+dist/
 
 # editor / OS noise
 .vscode/

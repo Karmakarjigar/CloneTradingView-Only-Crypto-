@@ -1,13 +1,86 @@
 {
-  "name": "tvfree",
-  "version": "0.1.0",
+  "name": "clonetradingview",
+  "productName": "CloneTradingView",
+  "version": "1.0.0",
   "private": true,
-  "description": "Local TradingView-style charting terminal on free market data",
-  "main": "server.js",
+  "description": "Local TradingView-style charting terminal on free Binance market data",
+  "author": "Karmakarjigar",
+  "license": "MIT",
+  "main": "desktop/main.js",
   "scripts": {
-    "start": "node server.js --open"
+    "start": "node server.js --open",
+    "desktop": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.karmakarjigar.clonetradingview",
+    "productName": "CloneTradingView",
+    "copyright": "Copyright © 2026 Karmakarjigar",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server.js",
+        "to": "app-server/server.js"
+      },
+      {
+        "from": "binance-live.js",
+        "to": "app-server/binance-live.js"
+      },
+      {
+        "from": "tick-engine.js",
+        "to": "app-server/tick-engine.js"
+      },
+      {
+        "from": "lib",
+        "to": "app-server/lib"
+      },
+      {
+        "from": "public",
+        "to": "app-server/public"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "CloneTradingView-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CloneTradingView",
+      "uninstallDisplayName": "CloneTradingView ${version}",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
   }
 }
