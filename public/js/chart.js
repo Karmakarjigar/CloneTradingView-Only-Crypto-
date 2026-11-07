@@ -1157,10 +1157,15 @@ export class Chart {
       }
 
       if (this.pointerMode !== 'pan') return;
+      const main = this.computeLayout().list[0];
+      const sc = this.priceLock || this.mainScale;
       this._pan = {
         startX: x,
+        startY: y,
         from: this.view.from,
         to: this.view.to,
+        paneHeight: Math.max(2, main.height),
+        scale: sc ? { min: sc.min, max: sc.max } : null,
       };
       c.classList.add('panning');
       c.setPointerCapture(e.pointerId);
@@ -1184,10 +1189,25 @@ export class Chart {
 
       if (this._pan) {
         const dx = x - this._pan.startX;
+        const dy = y - this._pan.startY;
         const shift = -dx / (this.candleW || 1);
         this.view.from = this._pan.from + shift;
         this.view.to = this._pan.to + shift;
         this.clampView();
+
+        // Free 2D pan, like TradingView: vertical movement shifts the price
+        // window and pins it, while horizontal movement scrolls time.
+        if (Math.abs(dy) >= 2 && this._pan.scale) {
+          const span = this._pan.scale.max - this._pan.scale.min;
+          const delta = (dy * span) / this._pan.paneHeight;
+          if (Number.isFinite(delta)) {
+            this.priceLock = {
+              min: this._pan.scale.min + delta,
+              max: this._pan.scale.max + delta,
+            };
+          }
+        }
+
         this.requestRender();
         this.emitView();
       }

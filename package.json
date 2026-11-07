@@ -1,7 +1,7 @@
 {
   "name": "clonetradingview",
   "productName": "CloneTradingView",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Local TradingView-style charting terminal on free Binance market data",
   "author": "Karmakarjigar",

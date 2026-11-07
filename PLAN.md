@@ -175,3 +175,19 @@ alerts and trading UI. Data trust was server-only and went first.
       installs silently, launches, serves `/api/health`, and uninstalls cleanly
 - [x] Artifact: `dist/CloneTradingView-Setup-1.0.0.exe` (~121 MB, unsigned —
       SmartScreen "Unknown publisher" is expected); `dist/` stays out of git
+
+## 12. Free 2D pan  (chart.js) - done
+- [x] Plot drag now moves the chart in both axes like TradingView: `dx`
+      scrolls time (unchanged), `dy` translates the price window by
+      `dy * span / mainPaneHeight` and pins it with `priceLock`
+- [x] A purely horizontal drag still leaves the price scale auto-fitting, and
+      an active drawing tool still draws instead of panning
+- [x] The manual price window survives later horizontal pans and live ticks;
+      double-click still resets it and the time view
+- [x] Verified headlessly (19 checks): vertical up/down translation matches
+      `dy * span / height`, horizontal-only pans keep auto-fit, diagonal pans
+      move both axes, double-click reset, drawing-tool isolation, lock
+      persistence, zero console errors; 25/25 axis zoom, 50/50 drawings and
+      24/24 UI parity still pass
+- [x] Installer rebuilt as `CloneTradingView-Setup-1.0.1.exe`; app data in
+      `%APPDATA%\CloneTradingView` is preserved on upgrade

@@ -49,7 +49,9 @@ npm run dist
 
 **Charting**
 - Candlesticks, wicks, volume pane, last-price line, watermark
-- Pan (drag), zoom (wheel), fit (double-click)
+- Pan freely in both axes: drag sideways to scroll time, drag up/down to move
+  the price window (vertical drag pins it until reset)
+- Zoom with the wheel, fit with double-click
 - Drag the price axis up to stretch / down to compress the chart vertically;
   drag the time axis to change bar spacing. Wheel over an axis zooms just that
   axis, and double-clicking an axis resets it (double-click the plot resets both)
